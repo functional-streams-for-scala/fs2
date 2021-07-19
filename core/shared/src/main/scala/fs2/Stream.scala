@@ -38,7 +38,7 @@ import fs2.compat._
 import fs2.concurrent._
 import fs2.internal._
 
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 
 /** A stream producing output of type `O` and which may evaluate `F` effects.
   *
@@ -314,28 +314,31 @@ final class Stream[+F[_], +O] private[fs2] (private[fs2] val underlying: Pull[F,
     * }}}
     */
   def bufferBy(f: O => Boolean): Stream[F, O] = {
-    def dumpBuffer(bb: List[Chunk[O]]): Pull[F, O, Unit] =
-      bb.reverse.foldLeft(Pull.done: Pull[F, O, Unit])((acc, c) => acc >> Pull.output(c))
+    @inline
+    def dumpBuffer(bb: ListBuffer[Chunk[O]], rest: => Pull[F, O, Unit]): Pull[F, O, Unit] =
+      if (bb.isEmpty) rest else Pull.output(bb.head) >> dumpBuffer(bb.tail, rest)
 
-    def go(buffer: List[Chunk[O]], last: Boolean, s: Stream[F, O]): Pull[F, O, Unit] =
+    def go(buffer: ListBuffer[Chunk[O]], last: Boolean, s: Stream[F, O]): Pull[F, O, Unit] =
       s.pull.uncons.flatMap {
         case Some((hd, tl)) =>
-          val (out, buf, newLast) =
-            hd.foldLeft((Nil: List[Chunk[O]], Vector.empty[O], last)) {
-              case ((out, buf, last), i) =>
-                val cur = f(i)
-                if (!cur && last)
-                  (Chunk.vector(buf :+ i) :: out, Vector.empty, cur)
-                else (out, buf :+ i, cur)
+          val out = ListBuffer.empty[Chunk[O]]
+          val (buf, newLast) =
+            hd.foldLeft((Vector.empty[O], last)) { case ((buf, last), i) =>
+              val cur = f(i)
+              if (!cur && last) {
+                out += Chunk.vector(buf :+ i)
+                (Vector.empty, cur)
+              } else (buf :+ i, cur)
             }
-          if (out.isEmpty)
-            go(Chunk.vector(buf) :: buffer, newLast, tl)
-          else
-            dumpBuffer(buffer) >> dumpBuffer(out) >> go(List(Chunk.vector(buf)), newLast, tl)
+          if (out.isEmpty) {
+            buffer += Chunk.vector(buf)
+            go(buffer, newLast, tl)
+          } else
+            dumpBuffer(buffer, dumpBuffer(out, go(ListBuffer(Chunk.vector(buf)), newLast, tl)))
 
-        case None => dumpBuffer(buffer)
+        case None => dumpBuffer(buffer, Pull.done)
       }
-    go(Nil, false, this).stream
+    go(ListBuffer.empty, false, this).stream
   }
 
   /** Emits only elements that are distinct from their immediate predecessors,
