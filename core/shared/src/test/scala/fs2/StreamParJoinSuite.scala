@@ -204,4 +204,22 @@ class StreamParJoinSuite extends Fs2Suite {
       .parJoinUnbounded ++ Stream.emit(1)).compile.drain
       .intercept[Err]
   }
+
+  test("issue-2332") {
+    val s = Stream(()).repeatN(4).covary[IO]
+    val par4 = s.map(IO.delay(_)).parEvalMap(4)(identity)
+    Vector
+      .fill(8)(Deferred[IO, Unit])
+      .sequence
+      .flatMap { defs =>
+        val merged = par4.merge(par4)
+        merged.zipWithIndex
+          .parEvalMap(8) { case (_, i) => defs(i.toInt).complete(()) *> IO.never }
+          .compile
+          .drain
+          .start *> defs.traverse(_.get).as(true)
+      }
+      .timeout(1.second)
+      .assert
+  }
 }
