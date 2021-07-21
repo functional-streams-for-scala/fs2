@@ -59,6 +59,12 @@ object CompositeFailure {
     }
   }
 
+  def fromNel(errors: NonEmptyList[Throwable]): Throwable =
+    errors match {
+      case NonEmptyList(hd, Nil)               => hd
+      case NonEmptyList(first, second :: rest) => apply(first, second, rest)
+    }
+
   def fromList(errors: List[Throwable]): Option[Throwable] =
     errors match {
       case Nil                     => None
