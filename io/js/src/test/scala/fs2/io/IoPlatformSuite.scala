@@ -30,21 +30,22 @@ class IoPlatformSuite extends Fs2Suite {
 
   test("to/from Readable") {
     forAllF { bytes: Stream[Pure, Byte] =>
-      toReadable(bytes.covary[IO]).use { readable =>
-        fromReadable(IO.pure(readable)).compile.toVector.assertEquals(bytes.compile.toVector)
-      }
+      bytes
+        .through(toReadable[IO])
+        .flatMap { readable =>
+          readReadable(IO.pure(readable))
+        }
+        .compile
+        .toVector
+        .assertEquals(bytes.compile.toVector)
     }
   }
 
   test("mk/from Writable") {
     forAllF { bytes: Stream[Pure, Byte] =>
-      mkWritable[IO].use { case (writable, stream) =>
-        stream
-          .concurrently(bytes.covary[IO].through(fromWritable(IO.pure(writable))))
-          .compile
-          .toVector
-          .assertEquals(bytes.compile.toVector)
-      }
+      readWritable[IO] { writable =>
+        bytes.covary[IO].through(writeWritable(IO.pure(writable))).compile.drain
+      }.compile.toVector.assertEquals(bytes.compile.toVector)
     }
   }
 

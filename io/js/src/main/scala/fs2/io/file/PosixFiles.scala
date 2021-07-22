@@ -328,7 +328,7 @@ object PosixFiles {
       readAll(path, Flags.r)
 
     override def readAll(path: Path, flags: Flags): Stream[F, Byte] =
-      fromReadable(
+      readReadable(
         F.delay(
           fsMod
             .createReadStream(
@@ -340,7 +340,7 @@ object PosixFiles {
       )
 
     override def readRange(path: Path, chunkSize: Int, start: Long, end: Long): Stream[F, Byte] =
-      fromReadable(
+      readReadable(
         F.delay(
           fsMod
             .createReadStream(
@@ -418,7 +418,7 @@ object PosixFiles {
       open(path, flags, mode).map(WriteCursor(_, 0L))
 
     override def writeAll(path: Path, flags: Flags, mode: FileAccessMode): Pipe[F, Byte, INothing] =
-      fromWritable(
+      writeWritable(
         F.delay(
           fsMod
             .createWriteStream(

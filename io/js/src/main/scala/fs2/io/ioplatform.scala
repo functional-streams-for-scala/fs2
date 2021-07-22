@@ -41,15 +41,17 @@ import scala.scalajs.js.|
 
 private[fs2] trait ioplatform {
 
-  def fromReadable[F[_]](readable: F[Readable])(implicit F: Async[F]): Stream[F, Byte] =
+  def readReadable[F[_]](readable: F[Readable], destroyIfNotEnded: Boolean = true)(implicit
+      F: Async[F]
+  ): Stream[F, Byte] =
     Stream
       .resource(for {
         readable <- Resource.makeCase(readable.map(_.asInstanceOf[streamMod.Readable])) {
           case (readable, Resource.ExitCase.Succeeded) =>
-            if (!readable.readableEnded)
-              F.delay(readable.destroy())
-            else
-              F.unit
+            F.delay {
+              if (!readable.readableEnded & destroyIfNotEnded)
+                readable.destroy()
+            }
           case (readable, Resource.ExitCase.Errored(ex)) =>
             F.delay(readable.destroy(js.Error(ex.getMessage())))
           case (readable, Resource.ExitCase.Canceled) => F.delay(readable.destroy())
@@ -77,7 +79,10 @@ private[fs2] trait ioplatform {
           )
       }
 
-  def toReadable[F[_]](s: Stream[F, Byte])(implicit F: Async[F]): Resource[F, Readable] =
+  def toReadable[F[_]: Async]: Pipe[F, Byte, Readable] =
+    s => Stream.resource(toReadableResource(s))
+
+  def toReadableResource[F[_]](s: Stream[F, Byte])(implicit F: Async[F]): Resource[F, Readable] =
     for {
       dispatcher <- Dispatcher[F]
       semaphore <- Semaphore[F](1).toResource
@@ -113,8 +118,9 @@ private[fs2] trait ioplatform {
       }
     } yield readable.asInstanceOf[Readable]
 
-  def fromWritable[F[_]](
-      writable: F[Writable]
+  def writeWritable[F[_]](
+      writable: F[Writable],
+      endAfterUse: Boolean = true
   )(implicit F: Async[F]): Pipe[F, Byte, INothing] =
     in =>
       Stream.eval(writable.map(_.asInstanceOf[streamMod.Writable])).flatMap { writable =>
@@ -131,7 +137,10 @@ private[fs2] trait ioplatform {
               }
             } >> go(tail)
           case None =>
-            Pull.eval(F.async_[Unit](cb => writable.end(() => cb(Right(())))))
+            if (endAfterUse)
+              Pull.eval(F.async_[Unit](cb => writable.end(() => cb(Right(())))))
+            else
+              Pull.done
         }
 
         go(in).stream.handleErrorWith { ex =>
@@ -139,7 +148,12 @@ private[fs2] trait ioplatform {
         }.drain
       }
 
-  def mkWritable[F[_]](implicit F: Async[F]): Resource[F, (Writable, Stream[F, Byte])] =
+  def readWritable[F[_]: Async](f: Writable => F[Unit]): Stream[F, Byte] =
+    Stream.resource(mkWritable).flatMap { case (writable, stream) =>
+      stream.concurrently(Stream.eval(f(writable)))
+    }
+
+  private def mkWritable[F[_]](implicit F: Async[F]): Resource[F, (Writable, Stream[F, Byte])] =
     for {
       dispatcher <- Dispatcher[F]
       queue <- Queue.synchronous[F, Option[Chunk[Byte]]].toResource
